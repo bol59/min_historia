@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Passkeys demo (PHP)</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.5}
+    input,button{font-size:1rem;padding:.6rem .8rem}
+    .row{margin:16px 0}
+    code{background:#f5f5f5;padding:2px 6px;border-radius:4px}
+    .log{white-space:pre-wrap;background:#0b1020;color:#d6e0ff;padding:12px;border-radius:6px;min-height:100px}
+  </style>
+</head>
+<body>
+  <h1>Passkeys (WebAuthn) – PHP Demo</h1>
+  <p>Testa att registrera en passkey och logga in – kräver <strong>HTTPS</strong> eller <code>localhost</code>.</p>
+
+  <div class="row">
+    <label>E-post (användar-ID): <input id="email" type="email" placeholder="bo@example.com"></label>
+  </div>
+
+  <div class="row">
+    <button onclick="registerPasskey()">Registrera passkey</button>
+    <button onclick="loginPasskey()">Logga in med passkey</button>
+  </div>
+
+  <h3>Logg</h3>
+  <div id="log" class="log"></div>
+
+<script>
+function log(msg){ const el=document.getElementById('log'); el.textContent += msg + "\n"; }
+
+async function registerPasskey(){
+  const email = document.getElementById('email').value.trim();
+  if(!email){ alert('Ange e-post.'); return; }
+  try{
+    log('Startar registrering ...');
+    const beginRes = await fetch('/webauthn/register-begin.php', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email })
+    });
+    const options = await beginRes.json();
+
+    const publicKey = debase64ForCreate(options);
+    const cred = await navigator.credentials.create({ publicKey });
+
+    const completeRes = await fetch('/webauthn/register-complete.php', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(serializeForSend(cred))
+    });
+    const data = await completeRes.json();
+    if(data.ok){ log('✅ Registrering klar.'); } else { log('❌ Registrering misslyckades: ' + data.error); }
+  }catch(e){ log('❌ Fel: ' + e); }
+}
+
+async function loginPasskey(){
+  const email = document.getElementById('email').value.trim();
+  if(!email){ alert('Ange e-post.'); return; }
+  try{
+    log('Startar inloggning ...');
+    const beginRes = await fetch('/webauthn/login-begin.php', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email })
+    });
+    const options = await beginRes.json();
+
+    const publicKey = debase64ForGet(options);
+    const assertion = await navigator.credentials.get({ publicKey });
+
+    const completeRes = await fetch('/webauthn/login-complete.php', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(serializeForSend(assertion))
+    });
+    const data = await completeRes.json();
+    if(data.ok){ log('✅ Inloggad!'); } else { log('❌ Inloggning misslyckades: ' + data.error); }
+  }catch(e){ log('❌ Fel: ' + e); }
+}
+
+// ---- Hjälpare: base64url/ArrayBuffer konvertering ----
+function toBase64Url(buf){
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+  return b64.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function fromBase64Url(b64url){
+  const pad = '='.repeat((4 - b64url.length % 4) % 4);
+  const b64 = (b64url + pad).replace(/-/g,'+').replace(/_/g,'/');
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+function debase64ForCreate(opts){
+  const o = structuredClone(opts);
+  o.challenge = fromBase64Url(o.challenge);
+  o.user.id = fromBase64Url(o.user.id);
+  if(o.excludeCredentials){
+    o.excludeCredentials = o.excludeCredentials.map(x => ({...x, id: fromBase64Url(x.id)}));
+  }
+  return o;
+}
+function debase64ForGet(opts){
+  const o = structuredClone(opts);
+  o.challenge = fromBase64Url(o.challenge);
+  if(o.allowCredentials){
+    o.allowCredentials = o.allowCredentials.map(x => ({...x, id: fromBase64Url(x.id)}));
+  }
+  return o;
+}
+function serializeForSend(cred){
+  const attObj = cred.response.attestationObject;
+  const clientDataJSON = cred.response.clientDataJSON;
+  const authenticatorData = cred.response.authenticatorData;
+  const signature = cred.response.signature;
+  const userHandle = cred.response.userHandle;
+  return {
+    id: cred.id,
+    rawId: toBase64Url(cred.rawId),
+    type: cred.type,
+    response: {
+      attestationObject: attObj ? toBase64Url(attObj) : null,
+      clientDataJSON: toBase64Url(clientDataJSON),
+      authenticatorData: authenticatorData ? toBase64Url(authenticatorData) : null,
+      signature: signature ? toBase64Url(signature) : null,
+      userHandle: userHandle ? toBase64Url(userHandle) : null
+    },
+    clientExtensionResults: cred.getClientExtensionResults?.() || {}
+  };
+}
+</script>
+</body>
+</html>
